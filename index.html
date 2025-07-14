@@ -8,6 +8,7 @@
 		<title>Student Photo Manager - MP Board</title>
 		<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 		<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+		<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 		<style>
 			* {
 				margin: 0;
@@ -293,7 +294,7 @@
 						<input
 							type="file"
 							id="fileInput"
-							accept="image/*"
+							accept="image/*,.pdf"
 							style="display: none"
 						/>
 					</div>
@@ -514,15 +515,18 @@
 			}
 
 			function handleFile(file) {
+				if (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
+					handlePDF(file);
+					return;
+				}
 				if (!file.type.startsWith("image/")) {
 					showStatus(
 						"extractStatus",
-						"Please select a valid image file",
+						"Please select a valid image or PDF file",
 						"error"
 					);
 					return;
 				}
-
 				const reader = new FileReader();
 				reader.onload = function (e) {
 					currentImage = new Image();
@@ -537,6 +541,57 @@
 					currentImage.src = e.target.result;
 				};
 				reader.readAsDataURL(file);
+			}
+
+			// PDF handling using pdf.js
+			async function handlePDF(file) {
+				showStatus("extractStatus", "Loading PDF...", "info");
+				const fileReader = new FileReader();
+				fileReader.onload = async function (e) {
+					const typedarray = new Uint8Array(e.target.result);
+					const pdf = await pdfjsLib.getDocument({ data: typedarray }).promise;
+					if (pdf.numPages === 0) {
+						showStatus("extractStatus", "No pages found in PDF.", "error");
+						return;
+					}
+					// If multiple pages, let user select page
+					if (pdf.numPages > 1) {
+						let pageOptions = "<label for='pdfPageSelect'>Select PDF Page:</label> <select id='pdfPageSelect'>";
+						for (let i = 1; i <= pdf.numPages; i++) {
+							pageOptions += `<option value='${i}'>Page ${i}</option>`;
+						}
+						pageOptions += "</select> <button id='loadPdfPageBtn'>Load Page</button>";
+						document.getElementById("extractStatus").innerHTML = `<div class='status info'>PDF loaded: ${file.name} (${pdf.numPages} pages)<br>${pageOptions}</div>`;
+						document.getElementById("loadPdfPageBtn").onclick = async function () {
+							const pageNum = parseInt(document.getElementById("pdfPageSelect").value);
+							await renderPDFPage(pdf, pageNum, file.name);
+						};
+					} else {
+						await renderPDFPage(pdf, 1, file.name);
+					}
+				};
+				fileReader.readAsArrayBuffer(file);
+			}
+
+			async function renderPDFPage(pdf, pageNum, fileName) {
+				const page = await pdf.getPage(pageNum);
+				const viewport = page.getViewport({ scale: 2 });
+				const canvas = document.createElement("canvas");
+				const ctx = canvas.getContext("2d");
+				canvas.width = viewport.width;
+				canvas.height = viewport.height;
+				await page.render({ canvasContext: ctx, viewport: viewport }).promise;
+				// Convert canvas to image for compatibility with existing workflow
+				currentImage = new Image();
+				currentImage.onload = function () {
+					document.getElementById("extractBtn").disabled = false;
+					showStatus(
+						"extractStatus",
+						`PDF page loaded: ${fileName} (Page ${pageNum}, ${canvas.width}x${canvas.height})`,
+						"success"
+					);
+				};
+				currentImage.src = canvas.toDataURL();
 			}
 
 			// Image Extraction
